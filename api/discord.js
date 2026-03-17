@@ -1,7 +1,33 @@
 // api/discord.js — Forward Discord webhook dari Roblox ke Discord
-// Roblox tidak bisa POST langsung ke discord.com, jadi lewat Vercel dulu
+// Menggunakan https module bawaan Node.js (bukan fetch) agar kompatibel semua versi
+
+const https = require("https");
 
 const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1483298694391664702/3flhLEdabBBYWvYhsNkZ4WLvV1T4ZixUj13y8PELMh2xM2WSF28Li0x7NheZymEwz11z";
+
+function postJSON(url, data) {
+  return new Promise((resolve, reject) => {
+    const body    = JSON.stringify(data);
+    const parsed  = new URL(url);
+    const options = {
+      hostname: parsed.hostname,
+      path:     parsed.pathname + parsed.search,
+      method:   "POST",
+      headers:  {
+        "Content-Type":   "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    };
+    const req = https.request(options, (res) => {
+      let raw = "";
+      res.on("data", (chunk) => raw += chunk);
+      res.on("end", () => resolve({ status: res.statusCode, body: raw }));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin",  "*");
@@ -21,24 +47,18 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const response = await fetch(DISCORD_WEBHOOK, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify(body),
-    });
+    const result = await postJSON(DISCORD_WEBHOOK, body);
 
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(`[Discord] Error ${response.status}: ${text}`);
-      return res.status(200).json({ ok: false, status: response.status, error: text });
+    if (result.status < 200 || result.status >= 300) {
+      console.error(`[Discord] Error ${result.status}: ${result.body}`);
+      return res.status(200).json({ ok: false, status: result.status, error: result.body });
     }
 
     console.log("[Discord] ✅ Webhook forwarded successfully");
     return res.status(200).json({ ok: true });
 
   } catch (err) {
-    console.error("[Discord] Fetch error:", err.message);
+    console.error("[Discord] Error:", err.message);
     return res.status(200).json({ ok: false, error: err.message });
   }
 };
-discord.js
