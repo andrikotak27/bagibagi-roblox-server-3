@@ -1,7 +1,25 @@
-// api/donations.js — MENGGUNAKAN VERCEL KV (persistent!)
-// Roblox polling endpoint ini untuk ambil donasi baru
+// api/donations.js — Upstash Redis via REST API (STORAGE prefix)
 
-const { kv } = require("@vercel/kv");
+async function redisCommand(args) {
+  const url   = process.env.STORAGE_URL   || process.env.KV_REST_API_URL;
+  const token = process.env.STORAGE_TOKEN || process.env.KV_REST_API_TOKEN;
+
+  if (!url || !token) {
+    throw new Error("Missing STORAGE_URL or STORAGE_TOKEN");
+  }
+
+  const res = await fetch(`${url}/${args.map(encodeURIComponent).join("/")}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Redis error ${res.status}: ${text}`);
+  }
+
+  const data = await res.json();
+  return data.result;
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin",  "*");
@@ -15,11 +33,11 @@ module.exports = async function handler(req, res) {
   const since = parseInt(req.query.since || "0", 10);
 
   try {
-    // Ambil semua donasi dari KV
-    const raw = await kv.lrange("donations", 0, 499);
+    // Ambil semua donasi dari Redis
+    const raw = await redisCommand(["LRANGE", "donations", "0", "499"]);
 
     if (!raw || raw.length === 0) {
-      console.log(`[Donations] KV kosong`);
+      console.log(`[Donations] Redis kosong`);
       return res.status(200).json({
         donations:  [],
         total:      0,
@@ -45,10 +63,10 @@ module.exports = async function handler(req, res) {
     const oneHourAgo = Math.floor(Date.now() / 1000) - 3600;
     const fresh = allDonations.filter(d => d.timestamp >= oneHourAgo);
     if (fresh.length < allDonations.length) {
-      const pipe = kv.pipeline();
-      pipe.del("donations");
-      for (const d of fresh) pipe.rpush("donations", JSON.stringify(d));
-      await pipe.exec();
+      await redisCommand(["DEL", "donations"]);
+      for (const d of fresh.reverse()) {
+        await redisCommand(["RPUSH", "donations", JSON.stringify(d)]);
+      }
       console.log(`[Donations] Cleaned ${allDonations.length - fresh.length} expired`);
     }
 
@@ -61,7 +79,7 @@ module.exports = async function handler(req, res) {
     });
 
   } catch (err) {
-    console.error("[Donations] KV Error:", err.message);
+    console.error("[Donations] Redis Error:", err.message);
     return res.status(200).json({
       donations:  [],
       total:      0,
