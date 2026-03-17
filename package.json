@@ -1,9 +1,6 @@
 {
   "name": "bagibagi-roblox-server",
-  "version": "3.0.0",
-  "description": "BagiBagi webhook receiver for Roblox - with Vercel KV persistence",
-  "private": true,
-  "dependencies": {
-    "@vercel/kv": "^1.0.0"
-  }
+  "version": "4.0.0",
+  "description": "BagiBagi webhook receiver for Roblox - Upstash Redis",
+  "private": true
 }
