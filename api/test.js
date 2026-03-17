@@ -1,36 +1,26 @@
-// api/test.js
-// ─────────────────────────────────────────────────────────────────────────────
-//  Inject donasi test manual — untuk ngecek apakah pipeline ke Roblox jalan
-//  POST /api/test?secret=<BAGIBAGI_WEBHOOK_TOKEN>
-//  Body: { "name": "TestBudi", "amount": 50000, "message": "Test!" }
-// ─────────────────────────────────────────────────────────────────────────────
+// api/test.js — inject donasi test ke KV
+const { kv } = require("@vercel/kv");
 
-const { addToBuffer, donationBuffer } = require("./_store");
-
-module.exports = function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  // Wajib ada secret yang cocok dengan BAGIBAGI_WEBHOOK_TOKEN
-  const TOKEN = process.env.BAGIBAGI_WEBHOOK_TOKEN || "";
+  const TOKEN  = process.env.BAGIBAGI_WEBHOOK_TOKEN || "";
   const secret = req.query.secret || req.headers["x-secret"] || "";
   if (TOKEN && secret !== TOKEN) {
-    return res.status(401).json({ error: "Unauthorized — tambahkan ?secret=TOKEN_mu" });
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   if (req.method === "GET") {
+    let buffered = 0;
+    try { buffered = await kv.llen("donations") || 0; } catch {}
     return res.status(200).json({
-      info:         "POST ke sini untuk inject donasi test",
-      buffer_count: donationBuffer.length,
-      latest:       donationBuffer.slice(-5),
-      example: {
-        method: "POST",
-        url:    "/api/test?secret=TOKEN_MU",
-        body:   { name: "TestBudi", amount: 50000, message: "Test!" },
-      },
+      info:     "POST ke sini untuk inject donasi test",
+      buffered: buffered,
+      example:  { name: "TestBudi", amount: 50000, message: "Halo!" },
     });
   }
 
@@ -50,8 +40,16 @@ module.exports = function handler(req, res) {
     timestamp: Math.floor(Date.now() / 1000),
   };
 
-  const added = addToBuffer(donation);
-  console.log(`[Test] Injected: ${donation.name} Rp${donation.amount} | added=${added}`);
+  try {
+    const pipe = kv.pipeline();
+    pipe.lpush("donations", JSON.stringify(donation));
+    pipe.ltrim("donations", 0, 499);
+    pipe.sadd("processed_ids", donation.id);
+    await pipe.exec();
 
-  return res.status(200).json({ ok: true, added, donation });
+    console.log(`[Test] Injected: ${donation.name} Rp${donation.amount} → KV`);
+    return res.status(200).json({ ok: true, donation });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
 };
