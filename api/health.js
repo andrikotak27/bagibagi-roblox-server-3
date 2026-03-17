@@ -1,28 +1,42 @@
 // api/health.js
-const { kv } = require("@vercel/kv");
+
+async function redisCommand(args) {
+  const url   = process.env.STORAGE_URL   || process.env.KV_REST_API_URL;
+  const token = process.env.STORAGE_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (!url || !token) throw new Error("Missing env vars");
+  const res = await fetch(`${url}/${args.map(encodeURIComponent).join("/")}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  return data.result;
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  let kvStatus = "unknown";
-  let buffered = 0;
+  let redisStatus = "unknown";
+  let buffered    = 0;
+
   try {
-    buffered = await kv.llen("donations") || 0;
-    kvStatus = "connected";
+    buffered    = await redisCommand(["LLEN", "donations"]) || 0;
+    redisStatus = "connected ✅";
   } catch (err) {
-    kvStatus = "error: " + err.message;
+    redisStatus = "error: " + err.message;
   }
 
+  const url   = process.env.STORAGE_URL   || process.env.KV_REST_API_URL   || "";
+  const token = process.env.STORAGE_TOKEN || process.env.KV_REST_API_TOKEN || "";
+
   res.status(200).json({
-    status:    "ok",
-    service:   "BagiBagi → Roblox Bridge v3 (KV)",
-    timestamp: new Date().toISOString(),
-    kv_status: kvStatus,
-    buffered:  buffered,
+    status:       "ok",
+    service:      "BagiBagi → Roblox Bridge v4 (Upstash Redis)",
+    timestamp:    new Date().toISOString(),
+    redis_status: redisStatus,
+    buffered:     buffered,
     env_check: {
       BAGIBAGI_WEBHOOK_TOKEN: !!process.env.BAGIBAGI_WEBHOOK_TOKEN,
-      KV_REST_API_URL:        !!process.env.KV_REST_API_URL,
-      KV_REST_API_TOKEN:      !!process.env.KV_REST_API_TOKEN,
+      STORAGE_URL:            !!url,
+      STORAGE_TOKEN:          !!token,
     },
   });
 };
