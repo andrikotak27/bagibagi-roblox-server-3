@@ -1,22 +1,18 @@
-// api/webhook.js — Upstash Redis via REST API (STORAGE prefix)
+// api/webhook.js — Upstash Redis + Forward ke Discord
+// Terima dari BagiBagi → simpan ke Redis → forward ke Discord
+
+const { kv } = require("@vercel/kv");
+
+// Discord Webhook URL
+const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1462972050065985638/W8U1kG4rjhikA4OMz0XIcphHaxE7aXegDhIRSVYoDPxPGwzTuUw0t3DqAcMtwz6qEnHI";
 
 async function redisCommand(args) {
   const url   = process.env.STORAGE_URL   || process.env.KV_REST_API_URL;
   const token = process.env.STORAGE_TOKEN || process.env.KV_REST_API_TOKEN;
-
-  if (!url || !token) {
-    throw new Error("Missing STORAGE_URL or STORAGE_TOKEN env vars");
-  }
-
+  if (!url || !token) throw new Error("Missing STORAGE_URL or STORAGE_TOKEN");
   const res = await fetch(`${url}/${args.map(encodeURIComponent).join("/")}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Redis error ${res.status}: ${text}`);
-  }
-
   const data = await res.json();
   return data.result;
 }
@@ -38,6 +34,46 @@ function normalize(raw) {
   };
 }
 
+function formatRupiah(n) {
+  return Number(n).toLocaleString("id-ID");
+}
+
+async function sendDiscord(donation) {
+  if (!DISCORD_WEBHOOK || DISCORD_WEBHOOK === "") return;
+  try {
+    const fields = [
+      { name: "Jumlah", value: "Rp " + formatRupiah(donation.amount), inline: true },
+    ];
+    if (donation.message && donation.message !== "") {
+      fields.push({ name: "Pesan", value: donation.message, inline: false });
+    }
+    const payload = {
+      username: "BagiBagi Bot",
+      embeds: [{
+        title:       "DONASI BAGIBAGI BARU",
+        description: `**${donation.name}** baru saja berdonasi via BagiBagi!`,
+        color:       5793266,
+        fields:      fields,
+        timestamp:   new Date().toISOString(),
+        footer:      { text: "BagiBagi Donation System" },
+      }],
+    };
+    const res = await fetch(DISCORD_WEBHOOK, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(payload),
+    });
+    if (res.ok) {
+      console.log(`[Discord] ✅ Notifikasi terkirim: ${donation.name} Rp${donation.amount}`);
+    } else {
+      const text = await res.text();
+      console.error(`[Discord] ❌ Error ${res.status}: ${text}`);
+    }
+  } catch (err) {
+    console.error("[Discord] Fetch error:", err.message);
+  }
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -50,11 +86,11 @@ module.exports = async function handler(req, res) {
       const count = await redisCommand(["LLEN", "donations"]);
       return res.status(200).json({
         ok:       true,
-        status:   "BagiBagi webhook ready (Upstash)",
+        status:   "BagiBagi webhook ready (Upstash + Discord)",
         buffered: count || 0,
       });
-    } catch (err) {
-      return res.status(200).json({ ok: true, status: "BagiBagi webhook ready", error: err.message });
+    } catch {
+      return res.status(200).json({ ok: true, status: "BagiBagi webhook ready" });
     }
   }
 
@@ -88,15 +124,17 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true, skipped: "duplicate" });
     }
 
-    // Simpan donasi ke list Redis
+    // Simpan ke Redis
     await redisCommand(["LPUSH", "donations", JSON.stringify(donation)]);
     await redisCommand(["LTRIM", "donations", "0", "499"]);
-
-    // Tandai sudah diproses
     await redisCommand(["SADD", "processed_ids", donation.id]);
-    await redisCommand(["EXPIRE", "processed_ids", "604800"]); // 7 hari
+    await redisCommand(["EXPIRE", "processed_ids", "604800"]);
 
     console.log(`[Webhook] ✅ ${donation.name} Rp${donation.amount} → Redis`);
+
+    // Forward ke Discord (tidak tunggu, jalan paralel)
+    sendDiscord(donation).catch(err => console.error("[Discord] Background error:", err.message));
+
     return res.status(200).json({ ok: true, received: true });
 
   } catch (err) {
