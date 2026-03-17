@@ -1,8 +1,25 @@
-// api/webhook.js — MENGGUNAKAN VERCEL KV (persistent!)
-// Donasi disimpan di database Vercel KV, bukan memory
-// Jadi tidak hilang meski instance berbeda
+// api/webhook.js — Upstash Redis via REST API (STORAGE prefix)
 
-const { kv } = require("@vercel/kv");
+async function redisCommand(args) {
+  const url   = process.env.STORAGE_URL   || process.env.KV_REST_API_URL;
+  const token = process.env.STORAGE_TOKEN || process.env.KV_REST_API_TOKEN;
+
+  if (!url || !token) {
+    throw new Error("Missing STORAGE_URL or STORAGE_TOKEN env vars");
+  }
+
+  const res = await fetch(`${url}/${args.map(encodeURIComponent).join("/")}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Redis error ${res.status}: ${text}`);
+  }
+
+  const data = await res.json();
+  return data.result;
+}
 
 function normalize(raw) {
   let timestamp = Math.floor(Date.now() / 1000);
@@ -29,17 +46,15 @@ module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   if (req.method === "GET") {
-    // Tampilkan isi buffer dari KV untuk debug
     try {
-      const donations = await kv.lrange("donations", 0, 19) || [];
+      const count = await redisCommand(["LLEN", "donations"]);
       return res.status(200).json({
         ok:       true,
-        status:   "BagiBagi webhook ready (KV)",
-        buffered: donations.length,
-        latest:   donations.slice(0, 5),
+        status:   "BagiBagi webhook ready (Upstash)",
+        buffered: count || 0,
       });
-    } catch {
-      return res.status(200).json({ ok: true, status: "BagiBagi webhook ready" });
+    } catch (err) {
+      return res.status(200).json({ ok: true, status: "BagiBagi webhook ready", error: err.message });
     }
   }
 
@@ -67,25 +82,25 @@ module.exports = async function handler(req, res) {
 
   try {
     // Cek duplikat
-    const isDup = await kv.sismember("processed_ids", donation.id);
-    if (isDup) {
+    const isDup = await redisCommand(["SISMEMBER", "processed_ids", donation.id]);
+    if (isDup === 1) {
       console.log(`[Webhook] Duplikat: ${donation.id}`);
       return res.status(200).json({ ok: true, skipped: "duplicate" });
     }
 
-    // Simpan ke KV dengan pipeline untuk efisiensi
-    const pipe = kv.pipeline();
-    pipe.lpush("donations", JSON.stringify(donation));   // tambah ke list
-    pipe.ltrim("donations", 0, 499);                     // max 500 donasi
-    pipe.sadd("processed_ids", donation.id);             // tandai sudah diproses
-    pipe.expire("processed_ids", 86400 * 7);             // expire 7 hari
-    await pipe.exec();
+    // Simpan donasi ke list Redis
+    await redisCommand(["LPUSH", "donations", JSON.stringify(donation)]);
+    await redisCommand(["LTRIM", "donations", "0", "499"]);
 
-    console.log(`[Webhook] ✅ ${donation.name} Rp${donation.amount} → KV`);
+    // Tandai sudah diproses
+    await redisCommand(["SADD", "processed_ids", donation.id]);
+    await redisCommand(["EXPIRE", "processed_ids", "604800"]); // 7 hari
+
+    console.log(`[Webhook] ✅ ${donation.name} Rp${donation.amount} → Redis`);
     return res.status(200).json({ ok: true, received: true });
+
   } catch (err) {
-    console.error("[Webhook] KV Error:", err.message);
-    // Fallback: tetap return 200 agar BagiBagi tidak retry terus
+    console.error("[Webhook] Redis Error:", err.message);
     return res.status(200).json({ ok: true, error: err.message });
   }
 };
