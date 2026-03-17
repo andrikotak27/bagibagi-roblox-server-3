@@ -1,5 +1,15 @@
-// api/test.js — inject donasi test ke KV
-const { kv } = require("@vercel/kv");
+// api/test.js — inject donasi test ke Redis
+
+async function redisCommand(args) {
+  const url   = process.env.STORAGE_URL   || process.env.KV_REST_API_URL;
+  const token = process.env.STORAGE_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (!url || !token) throw new Error("Missing env vars");
+  const res = await fetch(`${url}/${args.map(encodeURIComponent).join("/")}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  return data.result;
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin",  "*");
@@ -11,12 +21,12 @@ module.exports = async function handler(req, res) {
   const TOKEN  = process.env.BAGIBAGI_WEBHOOK_TOKEN || "";
   const secret = req.query.secret || req.headers["x-secret"] || "";
   if (TOKEN && secret !== TOKEN) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return res.status(401).json({ error: "Unauthorized — tambahkan ?secret=TOKEN_mu" });
   }
 
   if (req.method === "GET") {
     let buffered = 0;
-    try { buffered = await kv.llen("donations") || 0; } catch {}
+    try { buffered = await redisCommand(["LLEN", "donations"]) || 0; } catch {}
     return res.status(200).json({
       info:     "POST ke sini untuk inject donasi test",
       buffered: buffered,
@@ -41,13 +51,9 @@ module.exports = async function handler(req, res) {
   };
 
   try {
-    const pipe = kv.pipeline();
-    pipe.lpush("donations", JSON.stringify(donation));
-    pipe.ltrim("donations", 0, 499);
-    pipe.sadd("processed_ids", donation.id);
-    await pipe.exec();
-
-    console.log(`[Test] Injected: ${donation.name} Rp${donation.amount} → KV`);
+    await redisCommand(["LPUSH", "donations", JSON.stringify(donation)]);
+    await redisCommand(["LTRIM", "donations", "0", "499"]);
+    console.log(`[Test] Injected: ${donation.name} Rp${donation.amount} → Redis`);
     return res.status(200).json({ ok: true, donation });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
