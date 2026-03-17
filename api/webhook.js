@@ -4,7 +4,7 @@
 const { kv } = require("@vercel/kv");
 
 // Discord Webhook URL
-const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1462972050065985638/W8U1kG4rjhikA4OMz0XIcphHaxE7aXegDhIRSVYoDPxPGwzTuUw0t3DqAcMtwz6qEnHI";
+const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1483298694391664702/3flhLEdabBBYWvYhsNkZ4WLvV1T4ZixUj13y8PELMh2xM2WSF28Li0x7NheZymEwz11z";
 
 async function redisCommand(args) {
   const url   = process.env.STORAGE_URL   || process.env.KV_REST_API_URL;
